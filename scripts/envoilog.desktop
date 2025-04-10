@@ -6,3 +6,4 @@ NoDisplay=false
 X-GNOME-Autostart-enabled=true
 Name=WriteToFile
 Comment=Write to a file at startup
+Terminal=false

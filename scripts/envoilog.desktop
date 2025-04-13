@@ -1,9 +1,0 @@
-[Desktop Entry]
-Type=Application
-Exec=/home/nixiews/Desktop/BORDEL/scripts/Heurdempc.sh
-Hidden=false
-NoDisplay=false
-X-GNOME-Autostart-enabled=true
-Name=WriteToFile
-Comment=Write to a file at startup
-Terminal=false

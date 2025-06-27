@@ -36,12 +36,11 @@ parted /dev/"$INSTALL_DISK" -- set 1 boot on
 mkfs.ext4 /dev/"$INSTALL_DISK"1
 mount /dev/"$INSTALL_DISK"1 /mnt/gentoo
 
-# Step 7: Download and extract the Gentoo binary stage4
+# Step 7: Extract your local stage3 tarball
 cd /mnt/gentoo
-echo "Fetching latest Gentoo binary stage4..."
-STAGE4_URL=$(curl -s https://bouncer.gentoo.org/fetch/root/all/releases/amd64/autobuilds/latest-stage4-amd64-systemd+openrc.txt | grep -v '^#' | head -1 | awk '{print $1}')
-wget "https://distfiles.gentoo.org/releases/amd64/autobuilds/$STAGE4_URL"
-tar xpvf *.tar.xz --xattrs-include='*.*' --numeric-owner
+echo "Extracting your local stage3 tarball..."
+read -rp "Enter the full path to your local stage3 tarball (e.g., /home/user/stage3-amd64.tar.gz): " STAGE3_PATH
+tar xpvf "$STAGE3_PATH" --xattrs-include='*.*' --numeric-owner
 
 # Step 8: Mount necessary filesystems
 mount --types proc /proc /mnt/gentoo/proc

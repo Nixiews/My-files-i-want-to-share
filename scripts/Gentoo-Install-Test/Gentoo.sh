@@ -3,12 +3,12 @@
 # Gentoo Linux Installation Script (BIOS/MBR)
 # Based on: https://wiki.gentoo.org/wiki/Handbook:AMD64
 # Installation started by: Nixiews
-# Date: 2025-06-27 21:18:10 UTC
+# Date: 2025-06-27 21:23:22 UTC
 
 # === Interactive Configuration ===
 echo "Welcome to Gentoo Linux Installation Script"
 echo "Installation started by: Nixiews"
-echo "Date: 2025-06-27 21:18:10 UTC"
+echo "Date: 2025-06-27 21:23:22 UTC"
 echo
 
 # List available disks
@@ -218,8 +218,33 @@ export PS1="(chroot) \${PS1}"
 emerge-webrsync
 emerge --sync
 
-# Select profile
-eselect profile set default/linux/amd64/17.1/desktop/systemd
+# Create a script to handle profile selection
+cat > /root/select-profile.sh << 'INNERSCRIPT'
+#!/bin/bash
+# Get available profiles
+profiles=\$(eselect profile list)
+echo "Available profiles:"
+echo "\$profiles"
+echo
+
+# Find systemd profile
+profile_number=\$(echo "\$profiles" | grep -n "systemd" | grep -v "plasma" | head -n1 | cut -d':' -f1)
+if [ -n "\$profile_number" ]; then
+    echo "Selecting profile number \$profile_number..."
+    eselect profile set "\$profile_number"
+    echo "Selected profile:"
+    eselect profile show
+else
+    echo "Error: No suitable systemd profile found!"
+    exit 1
+fi
+INNERSCRIPT
+
+chmod +x /root/select-profile.sh
+/root/select-profile.sh
+
+# Update @world set after profile selection
+emerge --update --deep --newuse @world
 
 # Configure timezone
 echo "UTC" > /etc/timezone

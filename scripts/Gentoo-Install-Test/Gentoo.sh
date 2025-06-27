@@ -1,109 +1,111 @@
 #!/bin/bash
+
 set -e
 
-### --- User Input --- ###
-echo "=== Gentoo Minimal Installer (Local Stage3) ==="
-read -rp "Enter full path to local stage3 tarball (e.g., /mnt/stage3-amd64.tar.gz): " STAGE3_PATH
-if [[ ! -f "$STAGE3_PATH" ]]; then
-    echo "Error: File not found at $STAGE3_PATH"
-    exit 1
-fi
-
-read -rp "Enter target disk (e.g., /dev/sda): " DISK
-if [ ! -b "$DISK" ]; then
-    echo "Error: $DISK is not a valid block device."
-    exit 1
-fi
-
-read -rp "Enter hostname for this system: " HOSTNAME
-
-read -rsp "Enter root password: " ROOT_PASSWORD
+echo "==== Gentoo Binary Install Script (BIOS, No Compile) ===="
+echo "WARNING: This script will ERASE all data on the selected disk!"
+echo "You MUST review and understand each step before proceeding."
 echo
-read -rsp "Confirm root password: " CONFIRM_PASSWORD
-echo
-if [ "$ROOT_PASSWORD" != "$CONFIRM_PASSWORD" ]; then
-    echo "Error: Passwords do not match."
-    exit 1
-fi
 
-### --- Partitioning --- ###
-echo "[*] Partitioning $DISK..."
-parted -s "$DISK" mklabel msdos
-parted -s "$DISK" mkpart primary ext4 1MiB 512MiB
-parted -s "$DISK" mkpart primary ext4 512MiB 100%
-parted -s "$DISK" set 1 boot on
+# Step 1: Choose the install disk
+echo "Available Disks:"
+lsblk -d -o NAME,SIZE,MODEL
+read -rp "Enter the disk to install Gentoo on (e.g., sda): " INSTALL_DISK
 
-mkfs.ext4 "${DISK}1"
-mkfs.ext4 "${DISK}2"
+# Step 2: Set hostname
+read -rp "Enter your desired hostname: " HOSTNAME
 
-mount "${DISK}2" /mnt/gentoo
-mkdir -p /mnt/gentoo/boot
-mount "${DISK}1" /mnt/gentoo/boot
+# Step 3: Choose root password and create a user
+read -rp "Enter your desired username: " USERNAME
 
-### --- Extract Stage3 --- ###
-echo "[*] Extracting stage3 from $STAGE3_PATH..."
-tar xpf "$STAGE3_PATH" -C /mnt/gentoo --xattrs-include='*.*' --numeric-owner
+# Step 4: Set locale and timezone
+echo "Available timezones (partial list):"
+ls /usr/share/zoneinfo | head -20
+read -rp "Enter your desired timezone (e.g., Europe/Berlin): " TIMEZONE
 
-### --- Prepare for Chroot --- ###
-cp -L /etc/resolv.conf /mnt/gentoo/etc/
+read -rp "Enter your desired locale (e.g., en_US.UTF-8): " LOCALE
+
+# Step 5: Partition the disk (BIOS, MBR)
+echo "Partitioning /dev/$INSTALL_DISK..."
+sgdisk --zap-all /dev/"$INSTALL_DISK"
+parted /dev/"$INSTALL_DISK" -- mklabel msdos
+parted /dev/"$INSTALL_DISK" -- mkpart primary ext4 2MiB 100%
+parted /dev/"$INSTALL_DISK" -- set 1 boot on
+
+# Step 6: Format and mount
+mkfs.ext4 /dev/"$INSTALL_DISK"1
+mount /dev/"$INSTALL_DISK"1 /mnt/gentoo
+
+# Step 7: Download and extract the Gentoo binary stage4
+cd /mnt/gentoo
+echo "Fetching latest Gentoo binary stage4..."
+STAGE4_URL=$(curl -s https://bouncer.gentoo.org/fetch/root/all/releases/amd64/autobuilds/latest-stage4-amd64-systemd+openrc.txt | grep -v '^#' | head -1 | awk '{print $1}')
+wget "https://distfiles.gentoo.org/releases/amd64/autobuilds/$STAGE4_URL"
+tar xpvf *.tar.xz --xattrs-include='*.*' --numeric-owner
+
+# Step 8: Mount necessary filesystems
 mount --types proc /proc /mnt/gentoo/proc
 mount --rbind /sys /mnt/gentoo/sys
 mount --make-rslave /mnt/gentoo/sys
 mount --rbind /dev /mnt/gentoo/dev
 mount --make-rslave /mnt/gentoo/dev
 
-### --- Chroot Section --- ###
-echo "[*] Entering chroot to complete install..."
+# Step 9: Copy DNS info
+cp -L /etc/resolv.conf /mnt/gentoo/etc/
 
-cat << EOF | chroot /mnt/gentoo /bin/bash
-source /etc/profile
-export PS1="(chroot) \$PS1"
+# Step 10: Enter chroot and configure
+cat << 'EOF' > /mnt/gentoo/install-inside-chroot.sh
+#!/bin/bash
+set -e
 
-echo "[*] Syncing portage..."
-emerge-webrsync
-
-echo "[*] Installing gentoo-kernel-bin (precompiled kernel)..."
-emerge --verbose gentoo-kernel-bin
-
-echo "UTC" > /etc/timezone
-emerge --config sys-libs/timezone-data
-
-echo 'en_US.UTF-8 UTF-8' > /etc/locale.gen
-locale-gen
-eselect locale set en_US.utf8
-env-update && source /etc/profile
-
+echo "Setting hostname..."
 echo "$HOSTNAME" > /etc/hostname
 
-echo "[*] Setting root password..."
-echo "root:$ROOT_PASSWORD" | chpasswd
+echo "Setting timezone..."
+echo "$TIMEZONE" > /etc/timezone
+ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime
 
-echo "[*] Installing basic tools..."
-emerge --noreplace syslog-ng dhcpcd grub
+echo "Configuring locale..."
+echo "LANG=$LOCALE" > /etc/locale.conf
+echo "$LOCALE UTF-8" >> /etc/locale.gen
+locale-gen
 
-echo "[*] Setting up fstab..."
-cat << FSTAB > /etc/fstab
-/dev/sda1   /boot       ext4    defaults        0 2
-/dev/sda2   /           ext4    noatime         0 1
-FSTAB
+echo "Setting root password..."
+passwd
 
-echo "[*] Setting up networking..."
-echo "config_eth0=\"dhcp\"" >> /etc/conf.d/net
-ln -s /etc/init.d/net.lo /etc/init.d/net.eth0
-rc-update add net.eth0 default
+echo "Creating user..."
+useradd -m -G wheel,audio,video -s /bin/bash $USERNAME
+passwd $USERNAME
 
-echo "[*] Installing GRUB..."
-grub-install --target=i386-pc "$DISK"
+echo "Configuring sudo (optionally)..."
+emerge -q app-admin/sudo
+echo '%wheel ALL=(ALL) ALL' > /etc/sudoers.d/wheel
+
+echo "Updating package manager..."
+emerge --sync
+emerge -qv @system
+
+echo "Setting up bootloader (GRUB, BIOS)..."
+emerge -q sys-boot/grub
+grub-install /dev/$INSTALL_DISK
 grub-mkconfig -o /boot/grub/grub.cfg
 
+echo "Enabling networking..."
 rc-update add dhcpcd default
-rc-update add syslog-ng default
+rc-service dhcpcd start
 
-exit
+echo "Install complete! You can now exit chroot, unmount, and reboot."
 EOF
 
-echo "[*] Cleaning up and unmounting..."
+chmod +x /mnt/gentoo/install-inside-chroot.sh
+
+# Step 11: Chroot and run inside script
+cp /etc/portage/make.conf /mnt/gentoo/etc/portage/make.conf || true
+chroot /mnt/gentoo /bin/bash -c 'source /etc/profile; export PS1="(chroot) $PS1"; bash /install-inside-chroot.sh'
+
+# Step 12: Cleanup and reboot
+echo "Cleaning up..."
+rm /mnt/gentoo/install-inside-chroot.sh
 umount -l /mnt/gentoo/dev{/shm,/pts,}
 umount -R /mnt/gentoo
-
-echo "[✔] Gentoo installed successfully! You may now reboot."
+reboot

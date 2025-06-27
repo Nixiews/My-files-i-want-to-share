@@ -1,110 +1,154 @@
 #!/bin/bash
 
-set -e
+# Gentoo Linux Installation Script (BIOS/MBR)
+# Based on: https://wiki.gentoo.org/wiki/Handbook:AMD64
 
-echo "==== Gentoo Binary Install Script (BIOS, No Compile) ===="
-echo "WARNING: This script will ERASE all data on the selected disk!"
-echo "You MUST review and understand each step before proceeding."
+# === Interactive Configuration ===
+echo "Welcome to Gentoo Linux Installation Script"
+echo "Please provide the following information:"
 echo
 
-# Step 1: Choose the install disk
-echo "Available Disks:"
+# List available disks
+echo "Available disks:"
 lsblk -d -o NAME,SIZE,MODEL
-read -rp "Enter the disk to install Gentoo on (e.g., sda): " INSTALL_DISK
+echo
+while true; do
+    read -p "Enter target disk (e.g., sda, sdb): " disk_input
+    if [[ -b "/dev/${disk_input}" ]]; then
+        DISK="/dev/${disk_input}"
+        echo "Selected disk: ${DISK}"
+        break
+    else
+        echo "Error: Invalid disk. Please choose from the list above."
+    fi
+done
 
-# Step 2: Set hostname
-read -rp "Enter your desired hostname: " HOSTNAME
+# Boot partition size
+while true; do
+    read -p "Enter boot partition size (default: 128M): " boot_input
+    if [[ -z "$boot_input" ]]; then
+        BOOT_SIZE="128M"
+        break
+    elif [[ $boot_input =~ ^[0-9]+[MGT]$ ]]; then
+        BOOT_SIZE=$boot_input
+        break
+    else
+        echo "Error: Please enter size in format like 128M, 1G, etc."
+    fi
+done
 
-# Step 3: Choose root password and create a user
-read -rp "Enter your desired username: " USERNAME
+# Get system memory for swap recommendation
+TOTAL_MEM=$(free -g | awk '/^Mem:/{print $2}')
+RECOMMENDED_SWAP=$((TOTAL_MEM + (TOTAL_MEM/2))) # 1.5x RAM
 
-# Step 4: Set locale and timezone
-echo "Available timezones (partial list):"
-ls /usr/share/zoneinfo | head -20
-read -rp "Enter your desired timezone (e.g., Europe/Berlin): " TIMEZONE
+# Swap partition size
+echo "Recommended swap size for hibernation: ${RECOMMENDED_SWAP}G (1.5x your RAM)"
+while true; do
+    read -p "Enter swap partition size (default: ${RECOMMENDED_SWAP}G): " swap_input
+    if [[ -z "$swap_input" ]]; then
+        SWAP_SIZE="${RECOMMENDED_SWAP}G"
+        break
+    elif [[ $swap_input =~ ^[0-9]+[MGT]$ ]]; then
+        SWAP_SIZE=$swap_input
+        break
+    else
+        echo "Error: Please enter size in format like 4G, 8G, etc."
+    fi
+done
 
-read -rp "Enter your desired locale (e.g., en_US.UTF-8): " LOCALE
+# Stage3 selection
+echo "Available stage3 types:"
+echo "1) openrc (default)"
+echo "2) systemd"
+echo "3) nomultilib"
+echo "4) hardened-openrc"
+while true; do
+    read -p "Select stage3 type [1-4] (default: 1): " stage3_input
+    case $stage3_input in
+        "" | "1")
+            STAGE3_URL="https://distfiles.gentoo.org/releases/amd64/autobuilds/latest-stage3-amd64-openrc.txt"
+            break
+            ;;
+        "2")
+            STAGE3_URL="https://distfiles.gentoo.org/releases/amd64/autobuilds/latest-stage3-amd64-systemd.txt"
+            break
+            ;;
+        "3")
+            STAGE3_URL="https://distfiles.gentoo.org/releases/amd64/autobuilds/latest-stage3-amd64-nomultilib.txt"
+            break
+            ;;
+        "4")
+            STAGE3_URL="https://distfiles.gentoo.org/releases/amd64/autobuilds/latest-stage3-amd64-hardened.txt"
+            break
+            ;;
+        *)
+            echo "Invalid selection. Please choose a number between 1 and 4."
+            ;;
+    esac
+done
 
-# Step 5: Partition the disk (BIOS, MBR)
-echo "Partitioning /dev/$INSTALL_DISK..."
-sgdisk --zap-all /dev/"$INSTALL_DISK"
-parted /dev/"$INSTALL_DISK" -- mklabel msdos
-parted /dev/"$INSTALL_DISK" -- mkpart primary ext4 2MiB 100%
-parted /dev/"$INSTALL_DISK" -- set 1 boot on
+# Timezone selection
+echo "Available timezones:"
+ls -1 /usr/share/zoneinfo/
+echo
+while true; do
+    read -p "Enter your continent (e.g., Europe, America): " continent
+    if [[ -d "/usr/share/zoneinfo/${continent}" ]]; then
+        echo "Available cities in ${continent}:"
+        ls -1 "/usr/share/zoneinfo/${continent}"
+        read -p "Enter your city: " city
+        if [[ -f "/usr/share/zoneinfo/${continent}/${city}" ]]; then
+            TIMEZONE="${continent}/${city}"
+            break
+        else
+            echo "Invalid city. Please try again."
+        fi
+    else
+        echo "Invalid continent. Please try again."
+    fi
+done
 
-# Step 6: Format and mount
-mkfs.ext4 /dev/"$INSTALL_DISK"1
-mount /dev/"$INSTALL_DISK"1 /mnt/gentoo
+# Hostname
+while true; do
+    read -p "Enter hostname for your system (default: gentoo): " hostname_input
+    if [[ -z "$hostname_input" ]]; then
+        HOSTNAME="gentoo"
+        break
+    elif [[ $hostname_input =~ ^[a-zA-Z0-9-]+$ ]]; then
+        HOSTNAME=$hostname_input
+        break
+    else
+        echo "Error: Hostname can only contain letters, numbers, and hyphens."
+    fi
+done
 
-# Step 7: Extract your local stage3 tarball
-cd /mnt/gentoo
-echo "Extracting your local stage3 tarball..."
-read -rp "Enter the full path to your local stage3 tarball (e.g., /home/user/stage3-amd64.tar.gz): " STAGE3_PATH
-tar xpvf "$STAGE3_PATH" --xattrs-include='*.*' --numeric-owner
+# Root password
+while true; do
+    read -s -p "Enter root password: " pass1
+    echo
+    read -s -p "Confirm root password: " pass2
+    echo
+    if [[ "$pass1" == "$pass2" ]]; then
+        if [[ ${#pass1} -ge 8 ]]; then
+            ROOT_PASSWORD=$pass1
+            break
+        else
+            echo "Error: Password must be at least 8 characters long."
+        fi
+    else
+        echo "Error: Passwords do not match. Please try again."
+    fi
+done
 
-# Step 8: Mount necessary filesystems
-mount --types proc /proc /mnt/gentoo/proc
-mount --rbind /sys /mnt/gentoo/sys
-mount --make-rslave /mnt/gentoo/sys
-mount --rbind /dev /mnt/gentoo/dev
-mount --make-rslave /mnt/gentoo/dev
-
-# Step 9: Copy DNS info
-cp -L /etc/resolv.conf /mnt/gentoo/etc/
-
-# Step 10: Enter chroot and configure
-cat << 'EOF' > /mnt/gentoo/install-inside-chroot.sh
-#!/bin/bash
-set -e
-
-echo "Setting hostname..."
-echo "$HOSTNAME" > /etc/hostname
-
-echo "Setting timezone..."
-echo "$TIMEZONE" > /etc/timezone
-ln -sf /usr/share/zoneinfo/$TIMEZONE /etc/localtime
-
-echo "Configuring locale..."
-echo "LANG=$LOCALE" > /etc/locale.conf
-echo "$LOCALE UTF-8" >> /etc/locale.gen
-locale-gen
-
-echo "Setting root password..."
-passwd
-
-echo "Creating user..."
-useradd -m -G wheel,audio,video -s /bin/bash $USERNAME
-passwd $USERNAME
-
-echo "Configuring sudo (optionally)..."
-emerge -q app-admin/sudo
-echo '%wheel ALL=(ALL) ALL' > /etc/sudoers.d/wheel
-
-echo "Updating package manager..."
-emerge --sync
-emerge -qv @system
-
-echo "Setting up bootloader (GRUB, BIOS)..."
-emerge -q sys-boot/grub
-grub-install /dev/$INSTALL_DISK
-grub-mkconfig -o /boot/grub/grub.cfg
-
-echo "Enabling networking..."
-rc-update add dhcpcd default
-rc-service dhcpcd start
-
-echo "Install complete! You can now exit chroot, unmount, and reboot."
-EOF
-
-chmod +x /mnt/gentoo/install-inside-chroot.sh
-
-# Step 11: Chroot and run inside script
-cp /etc/portage/make.conf /mnt/gentoo/etc/portage/make.conf || true
-chroot /mnt/gentoo /bin/bash -c 'source /etc/profile; export PS1="(chroot) $PS1"; bash /install-inside-chroot.sh'
-
-# Step 12: Cleanup and reboot
-echo "Cleaning up..."
-rm /mnt/gentoo/install-inside-chroot.sh
-umount -l /mnt/gentoo/dev{/shm,/pts,}
-umount -R /mnt/gentoo
-reboot
+# Display configuration summary
+echo
+echo "=== Installation Configuration Summary ==="
+echo "Target Disk: $DISK"
+echo "Boot Size: $BOOT_SIZE"
+echo "Swap Size: $SWAP_SIZE"
+echo "Stage3 URL: $STAGE3_URL"
+echo "Timezone: $TIMEZONE"
+echo "Hostname: $HOSTNAME"
+echo "Root password: [hidden]"
+echo
+read -p "Press Enter to continue with these settings (or Ctrl+C to abort)..."
